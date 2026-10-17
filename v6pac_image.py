@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageChops, ImageDraw, ImageTk
 
 # 封面目标尺寸 —— 与 splashwindow.baml 的布局匹配, 不可随意更改
 TARGET_W, TARGET_H = 1200, 714
@@ -228,3 +228,50 @@ def render_crop_preview(img: Image.Image, base: Image.Image, view: CropView,
 
 def to_tk(img: Image.Image) -> ImageTk.PhotoImage:
     return ImageTk.PhotoImage(img)
+
+
+# ---------------------------------------------------------------- 圆角
+
+def corner_radius_px(img_w: int, img_h: int, percent: float) -> int:
+    """
+    把"圆角百分比"换算成像素半径。
+
+    用短边的百分比而不是固定像素: splash 可能被换成任意尺寸,
+    2% 在任何尺寸下看起来都是同一个圆角。
+    """
+    if percent <= 0:
+        return 0
+    short = min(img_w, img_h)
+    return max(0, int(round(short * percent / 100.0)))
+
+
+def apply_rounded_corners(img: Image.Image, radius: int) -> Image.Image:
+    """
+    把四角挖成透明 (alpha=0), 其余像素原样保留。
+
+    ⚠️ 只有目标窗口支持透明时才看得见。VOCALOID6 启动窗口的
+    WS_EX_LAYERED=False (不透明), alpha=0 会被渲染成黑色 ——
+    那样四角变成明显黑块, 比直角更难看。所以本功能默认关闭,
+    由用户在预览里确认后再启用。
+
+    遮罩用 4 倍超采样再缩回去: 这是让圆角边缘不出锯齿的最省事
+    办法 (逐像素反走样在 1200x714 上太慢)。
+    """
+    if radius <= 0:
+        return img
+    w, h = img.size
+    radius = min(radius, w // 2, h // 2)
+    if radius <= 0:
+        return img
+
+    ss = 4                                   # supersample
+    mask = Image.new("L", (w * ss, h * ss), 0)
+    d = ImageDraw.Draw(mask)
+    d.rounded_rectangle([0, 0, w * ss - 1, h * ss - 1],
+                        radius=radius * ss, fill=255)
+    mask = mask.resize((w, h), Image.LANCZOS)
+
+    out = img.convert("RGBA")
+    # 与原 alpha 相乘而不是直接替换: 原图若已有半透明像素, 不能被抬高。
+    out.putalpha(ImageChops.multiply(out.getchannel("A"), mask))
+    return out

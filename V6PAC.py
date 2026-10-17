@@ -173,6 +173,28 @@ class App(tk.Tk):
         ttk.Label(eff, text=f"{vimg.TARGET_W} × {vimg.TARGET_H}  (最终封面)",
                   style="Dim.TLabel").pack(anchor="w")
 
+        # 圆角控制。默认 0 = 关闭, 因为 VOCALOID6 启动窗口不透明,
+        # 透明角会被渲染成黑色 —— 是否启用由用户在预览里自己判断。
+        # 标注"实验性": 实测在默认窗口下四角会变黑, 不是所有人都想要的效果。
+        row_corner = ttk.Frame(eff)
+        row_corner.pack(fill="x", pady=(6, 0))
+        ttk.Label(row_corner, text="圆角（实验性）",
+                  style="Dim.TLabel").pack(side="left")
+        self.var_corner = tk.DoubleVar(value=0.0)
+        self.scale_corner = ttk.Scale(row_corner, from_=0.0, to=8.0,
+                                      orient="horizontal", length=180,
+                                      variable=self.var_corner,
+                                      command=lambda _v: self._on_corner_change())
+        self.scale_corner.pack(side="left", padx=(8, 8))
+        self.lbl_corner = ttk.Label(row_corner, text="关闭", width=10,
+                                    style="Dim.TLabel")
+        self.lbl_corner.pack(side="left")
+
+        ttk.Label(eff, style="Dim.TLabel", justify="left",
+                  text=("⚠️ 实验性：VOCALOID6 启动窗口不透明，四角会显示为"
+                        "黑色而不是透出桌面。预览里的黑色即最终效果。")
+                  ).pack(anchor="w", pady=(2, 0))
+
         self.canvas_eff = tk.Canvas(eff, bg="#101014", highlightthickness=1,
                                     highlightbackground="#3a3a42",
                                     width=460, height=280)
@@ -498,6 +520,26 @@ class App(tk.Tk):
                 pass
         self._eff_job = self.after(delay, self._do_effect)
 
+    def _on_corner_change(self) -> None:
+        """圆角滑块动了: 更新标签文字并重绘预览。"""
+        pct = self.var_corner.get()
+        if pct <= 0.05:
+            self.lbl_corner.config(text="关闭")
+        else:
+            px = vimg.corner_radius_px(vimg.TARGET_W, vimg.TARGET_H, pct)
+            self.lbl_corner.config(text=f"{pct:.1f}% ({px}px)")
+        # 拖动时低延迟, 松手后由 _schedule_heavy 走高精度重算
+        self._schedule_effect(20)
+        self._schedule_heavy(200)
+
+    def _corner_radius(self) -> int:
+        """当前圆角对应的像素半径 (0 = 关闭)。"""
+        try:
+            return vimg.corner_radius_px(vimg.TARGET_W, vimg.TARGET_H,
+                                         self.var_corner.get())
+        except Exception:
+            return 0
+
     def _do_effect(self) -> None:
         """渲染"最终封面"预览 (右侧大图)。"""
         self._eff_job = None
@@ -523,7 +565,23 @@ class App(tk.Tk):
             thumb = self.src_image.crop(box).resize((tw, th), Image.BILINEAR)
         except Exception:
             return
+
+        # 圆角也画进缩略图, 且**画在缩略图自己的尺度上**:
+        # 若对 1200x714 做好再缩小, 4 倍超采样遮罩的代价会随原图尺寸增长;
+        # 在 tw x th 上做, 成本恒定, 观感一致。
+        radius = self._corner_radius()
+        if radius > 0:
+            thumb = vimg.apply_rounded_corners(
+                thumb, vimg.corner_radius_px(tw, th,
+                                             self.var_corner.get()))
+
         self.eff_photo = vimg.to_tk(thumb)
+        # 圆角区域是透明的, 而 Canvas 自己的 bg 就是"窗口底色"。
+        # 用一个明显不同于深灰底的色块垫在后面, 才能看出哪些像素是空的。
+        if radius > 0:
+            c.create_rectangle(cw // 2 - tw // 2, ch // 2 - th // 2,
+                               cw // 2 + tw // 2, ch // 2 + th // 2,
+                               fill="#2a1020", outline="")
         c.create_image(cw // 2, ch // 2, anchor="center", image=self.eff_photo)
 
     def _schedule_heavy(self, delay: int = 220) -> None:
@@ -613,6 +671,11 @@ class App(tk.Tk):
             return
 
         cover = vimg.render_crop(self.src_image, self.view)
+
+        # 圆角必须在这里(最终 1200x714 上)做, 预览里那份只是给人看的。
+        radius = self._corner_radius()
+        if radius > 0:
+            cover = vimg.apply_rounded_corners(cover, radius)
 
         buf = io.BytesIO()
         cover.convert("RGBA").save(buf, format="PNG", optimize=True)
