@@ -8,6 +8,10 @@
 > 使用前请确认你接受这一点，并且**务必保留备份**（工具会自动备份一次）。
 > 非 Yamaha 官方工具，与 Yamaha 无关联。
 
+|界面示例|
+|-|
+|<img width="450" height="269" alt="image" src="https://github.com/user-attachments/assets/06cc01f9-755a-480b-8e8d-2f082b13ae06" />|
+|<img width="450" height="273" alt="image" src="https://github.com/user-attachments/assets/0b11eb1a-afec-4034-ba22-c63431ef319d" />|
 ---
 
 ## ⚠️ 运行前必读
