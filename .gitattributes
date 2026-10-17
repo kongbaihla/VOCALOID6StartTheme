@@ -1,0 +1,17 @@
+# Windows batch files MUST keep CRLF line endings.
+# Git's default normalisation would otherwise convert them to LF on clone,
+# and cmd.exe then mis-parses every line:
+#   'LOID6' is not recognized as an internal or external command
+# Keep .cmd/.bat ASCII-only as well - cmd reads them in the OEM code page,
+# so UTF-8 Chinese comments corrupt the parse.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Python sources carry Chinese comments in UTF-8; keep them as-is.
+*.py text eol=lf
+
+# Binaries - never touch
+*.exe binary
+*.dll binary
+*.ico binary
+*.png binary

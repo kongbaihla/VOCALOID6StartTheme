@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.python/
+python/
+
+# 运行时生成（含个人数据）
+备份/
+自定义/
+日志/
+输出/
+状态/
+
+# 构建产物
+obj/
+*.pdb
+*.log
