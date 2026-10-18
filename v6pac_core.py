@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -30,9 +31,34 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------- 路径常量
+#
+# 打包成 exe 后 `__file__` 指向 PyInstaller 的临时解压目录(_MEIPASS),
+# 每次运行都会变。若把运行时数据放在那里, 备份/日志/状态会在每次重启后
+# 消失 —— 对一个"帮你保住原版 DLL"的工具是致命的。
+#
+# 所以分成两个根:
+#   RES_ROOT  只读资源(bin\v6res.exe、web\、预设默认图)  -> _MEIPASS
+#   APP_ROOT  可写数据(备份/日志/状态/自定义/输出)       -> exe 所在目录
+# 未打包时两者相同。
 
-APP_ROOT = Path(__file__).resolve().parent
-V6RES = APP_ROOT / "bin" / "v6res.exe"
+def _resource_root() -> Path:
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(__file__).resolve().parent
+
+
+def _data_root() -> Path:
+    if getattr(sys, "frozen", False):
+        # exe 旁边: 用户能看到、能备份、升级时不会被删
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+RES_ROOT = _resource_root()
+APP_ROOT = _data_root()
+
+V6RES = RES_ROOT / "bin" / "v6res.exe"
 
 DIR_BACKUP = APP_ROOT / "备份"
 DIR_CUSTOM = APP_ROOT / "自定义"
@@ -46,7 +72,9 @@ for _d in (DIR_BACKUP, DIR_CUSTOM, DIR_PRESET, DIR_LOG, DIR_OUTPUT, DIR_STATE):
 
 STATE_FILE = DIR_STATE / "state.json"
 
-# 候选 DLL 位置 (按优先级)
+# 候选 DLL 位置 —— 只作为最后的兜底。
+# 真正可靠的来源是注册表的 InstallLocation(见 discover_dlls), 因为它记录了
+# 安装器实际写入了哪里; 写死盘符会在装到 D:/E: 时直接找不到。
 DLL_CANDIDATES = [
     Path(r"C:\Program Files\VOCALOID6\Editor\VOCALOID6.dll"),
     Path(r"C:\Program Files (x86)\VOCALOID6\Editor\VOCALOID6.dll"),
@@ -130,21 +158,123 @@ def _run_v6res(args: list[str], *, timeout: int = 180) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- DLL 定位
 
+def discover_dlls() -> list[dict]:
+    """
+    找出机器上所有 VOCALOID6.dll, 按可信度排序。
+
+    来源(优先级从高到低):
+      1. 注册表 Uninstall 项的 InstallLocation —— 安装器真正写过的位置
+      2. 各盘符的常见安装路径 —— 覆盖装在 D:/E: 的情况, 也覆盖绿色版
+
+    返回 [{"path", "version", "signature", "source"}]。同一路径只出现一次。
+    多个结果时由界面让用户挑: 本机就同时存在 C:\\Program Files 下的 6.13.3.1
+    和 E:\\VOCALOID6 下的 6.13.0.1, 静默"取第一个"很容易改错那个。
+    """
+    found: dict[str, dict] = {}
+
+    def add(p: Path, source: str) -> None:
+        try:
+            key = str(p.resolve()).lower()
+        except OSError:
+            key = str(p).lower()
+        if key in found:
+            return
+        if not p.is_file():
+            return
+        try:
+            sig, _ = signature_status(p)
+        except Exception:
+            sig = "Unknown"
+        found[key] = {
+            "path": str(p),
+            "version": file_version(p) or "?",
+            "signature": sig,
+            "source": source,
+        }
+
+    # 1) 注册表
+    try:
+        import winreg
+
+        roots = [
+            (winreg.HKEY_LOCAL_MACHINE,
+             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (winreg.HKEY_LOCAL_MACHINE,
+             r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (winreg.HKEY_CURRENT_USER,
+             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        ]
+        for hive, sub in roots:
+            try:
+                with winreg.OpenKey(hive, sub) as root:
+                    n = winreg.QueryInfoKey(root)[0]
+                    for i in range(n):
+                        try:
+                            name = winreg.EnumKey(root, i)
+                            with winreg.OpenKey(root, name) as k:
+                                try:
+                                    disp = winreg.QueryValueEx(k, "DisplayName")[0]
+                                except OSError:
+                                    continue
+                                if "VOCALOID6" not in str(disp):
+                                    continue
+                                try:
+                                    loc = winreg.QueryValueEx(k, "InstallLocation")[0]
+                                except OSError:
+                                    continue
+                                if not loc:
+                                    continue
+                                base = Path(str(loc))
+                                for rel in ("Editor\\VOCALOID6.dll",
+                                            "Editor\\VOCALOID6.dll".replace("\\", "/")):
+                                    add(base / rel, "注册表")
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+    # 2) 各盘符常见路径
+    try:
+        import string
+        for letter in string.ascii_uppercase:
+            root = Path(f"{letter}:\\")
+            if not root.exists():
+                continue
+            for rel in ("Program Files\\VOCALOID6\\Editor\\VOCALOID6.dll",
+                        "Program Files (x86)\\VOCALOID6\\Editor\\VOCALOID6.dll",
+                        "VOCALOID6\\Editor\\VOCALOID6.dll"):
+                add(root / rel, "扫描")
+    except Exception:
+        pass
+
+    # 3) 写死的兜底(和上面重复的会被去重)
+    for c in DLL_CANDIDATES:
+        add(c, "默认位置")
+
+    items = list(found.values())
+    # 注册表来源排前面, 其余按路径排序保证结果稳定
+    items.sort(key=lambda d: (0 if d["source"] == "注册表" else 1, d["path"]))
+    return items
+
+
 def find_dll(explicit: str | os.PathLike | None = None) -> Path:
-    """定位 VOCALOID6.dll。"""
+    """定位 VOCALOID6.dll。explicit 优先, 否则取 discover_dlls 的第一个。"""
     if explicit:
         p = Path(explicit)
         if p.is_file():
             return p
         raise V6PacError(f"指定的文件不存在: {p}")
 
-    for c in DLL_CANDIDATES:
-        if c.is_file():
-            return c
+    items = discover_dlls()
+    if items:
+        return Path(items[0]["path"])
+
     raise V6PacError(
         "未找到 VOCALOID6.dll。\n"
-        "已尝试:\n  " + "\n  ".join(str(c) for c in DLL_CANDIDATES) +
-        "\n\n请手动指定该文件。"
+        "已在注册表和各个盘符的常见路径里查找, 都没有结果。\n\n"
+        "请手动指定该文件。"
     )
 
 
@@ -402,41 +532,338 @@ def _sha256_file(p: Path) -> str:
 
 
 def backup_path_for(dll: Path) -> Path | None:
-    """查找已有的备份。"""
-    stem = dll.stem  # VOCALOID6.dll -> VOCALOID6
-    cands = sorted(DIR_BACKUP.glob(f"{dll.name}.*.bak"))
-    return cands[0] if cands else None
-
-
-def ensure_backup(dll: Path, *, force: bool = False) -> tuple[Path | None, str]:
     """
-    确保存在一份原版备份。
-    规则: 仅当文件为原版 (签名有效) 且尚无备份时创建; **永不覆盖已有备份**。
-    返回 (备份路径, 说明)。
-    """
-    existing = backup_path_for(dll)
-    if existing and not force:
-        return existing, f"已有备份: {existing.name}"
+    查找与**当前 DLL 版本匹配**的备份，找不到时退回最新的一份。
 
-    if not is_pristine(dll) and not force:
-        return existing, ("当前 DLL 已被修改过, 跳过备份 "
-                          "(避免用改过的文件覆盖原版备份)")
+    曾经这里只做 sorted(...)[0]，也就是按字母序取第一个。备份命名同时包含
+    版本号和时间戳，于是结果取决于字符串比较：'6.13.0.1...' 排在中文名的
+    '圆角测试前...' 前面, 还原就把一个更老的版本拷了回去 —— 启动画面右下角
+    的版本号随之从 6.13.3 变成 6.13.0(实测踩过)。
+
+    现在的规则:
+      1. 优先选版本号与当前 DLL 一致的备份(FileVersion 从 PE 资源读, 不靠文件名)
+      2. 同版本多份时选最新时间戳的
+      3. 一个都匹配不上时选最新时间戳的, 并让调用方知道
+    """
+    cands = list(DIR_BACKUP.glob(f"{dll.name}.*.bak"))
+    if not cands:
+        return None
+
+    def mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    # 按写入时间从新到旧
+    cands.sort(key=mtime, reverse=True)
+
+    cur = file_version(dll)
+    if cur:
+        for c in cands:
+            if file_version(c) == cur:
+                return c
+
+    return cands[0]
+
+def file_version(dll: Path) -> str | None:
+    """
+    读 PE 的 VS_FIXEDFILEINFO, 返回像 '6.13.3.1' 的版本号, 失败返回 None。
+
+    为什么不用 v6res: 它的 info 输出里**没有**版本字段(只有尺寸/哈希/资源数),
+    所以读它永远拿不到版本 —— 这正是第一版 backup_path_for 静默退化成
+    "随便挑一个"的原因。
+
+    也不用文件名: 用户会手工改名(本机就有一份叫 '圆角测试前' 的备份),
+    名字里的版本号不可信。
+
+    实现是纯 struct 解析, 不依赖 pefile / pywin32 —— 这两个在目标机上都没有。
+    """
+    try:
+        with open(dll, "rb") as f:
+            data = f.read(1024)
+            if data[:2] != b"MZ":
+                return None
+            pe_off = struct.unpack_from("<I", data, 0x3C)[0]
+            f.seek(pe_off)
+            if f.read(4) != b"PE\0\0":
+                return None
+            f.read(2)
+            num_sec = struct.unpack("<H", f.read(2))[0]
+            f.read(12)
+            opt_size = struct.unpack("<H", f.read(2))[0]
+            f.read(2)
+            opt_off = f.tell()
+            magic = struct.unpack("<H", f.read(2))[0]
+            if magic not in (0x10B, 0x20B):
+                return None
+            dd_off = opt_off + (112 if magic == 0x20B else 96)
+            f.seek(dd_off + 2 * 8)              # 数据目录[2] = 资源表
+            rva, _size = struct.unpack("<II", f.read(8))
+            if rva == 0:
+                return None
+
+            f.seek(opt_off + opt_size)          # 节表紧跟可选头
+            sections = []
+            for _ in range(num_sec):
+                raw = f.read(40)
+                if len(raw) < 40:
+                    break
+                vsz, vrva, rsz, roff = struct.unpack_from("<IIII", raw, 8)
+                sections.append((vrva, max(vsz, rsz), roff))
+
+            def rva2off(va):
+                for vrva, span, roff in sections:
+                    if vrva <= va < vrva + span:
+                        return roff + (va - vrva)
+                return None
+
+            base = rva2off(rva)
+            if base is None:
+                return None
+
+            def entries(off):
+                f.seek(off)
+                hdr = f.read(16)
+                if len(hdr) < 16:
+                    return []
+                nnamed, nid = struct.unpack_from("<HH", hdr, 12)
+                out = []
+                for i in range(nnamed + nid):
+                    f.seek(off + 16 + i * 8)
+                    nm, target = struct.unpack("<II", f.read(8))
+                    out.append((nm, target))
+                return out
+
+            # 资源树固定三层: 类型 -> 名字 -> 语言, 第 3 层才是数据项。
+            #
+            # 注意不要把"高位是 1"当成"跳过": 前两层的条目按定义都是子目录,
+            # 那个标志位正是它们存在的意思。第一版在这里 `continue`, 结果
+            # 一个条目都没进去, file_version 永远返回 None —— 而调用方把
+            # None 当成"版本未知", 于是备份选择静默退化成随便挑一个。
+            for nm, t1 in entries(base):                 # 层 1: 类型
+                if nm != 16 or not (t1 & 0x80000000):    # RT_VERSION = 16
+                    continue
+                lvl1 = base + (t1 & 0x7FFFFFFF)
+                for _n2, t2 in entries(lvl1):            # 层 2: 名字
+                    if not (t2 & 0x80000000):
+                        continue
+                    lvl2 = base + (t2 & 0x7FFFFFFF)
+                    for _n3, t3 in entries(lvl2):        # 层 3: 语言
+                        if t3 & 0x80000000:
+                            continue                     # 这一层若是目录则无数据
+                        leaf = base + (t3 & 0x7FFFFFFF)
+                        f.seek(leaf)
+                        d_rva, d_size, _, _ = struct.unpack("<IIII", f.read(16))
+                        doff = rva2off(d_rva)
+                        if doff is None:
+                            continue
+                        f.seek(doff)
+                        blob = f.read(d_size)
+                        i = blob.find(b"\xbd\x04\xef\xfe")   # VS_FIXEDFILEINFO
+                        if i >= 0:
+                            _, _, ms, ls = struct.unpack_from("<IIII", blob, i)
+                            return (f"{ms >> 16}.{ms & 0xFFFF}."
+                                    f"{ls >> 16}.{ls & 0xFFFF}")
+            return None
+    except Exception:
+        return None
+
+
+def ensure_backup(dll: Path, *, force: bool = False,
+                  reason: str = "manual") -> tuple[Path | None, str]:
+    """
+    备份当前 DLL。
+
+    规则(2026-10 改版):
+      * **每次调用都真的写一份**, 不再"已有备份就跳过"。这样每换一次封面
+        都留下上一版的状态, 可以回退。
+      * 首次遇到原版(签名有效)时, 它自然就是一份原版备份 —— 原版备份永不删除。
+      * 改过的版本也照备份, 由 trim_backups() 负责只保留最近若干份。
+
+    reason 写进文件名, 供备份列表显示来源:
+      apply    应用封面之前
+      upgrade  VOCALOID 升级之前
+      manual   用户手动
+
+    返回值第二个元素是给界面看的说明。
+    """
+    if not dll.is_file():
+        raise V6PacError(f"目标文件不存在: {dll}")
 
     try:
-        ver = "unknown"
-        try:
-            from PIL import Image  # noqa
-        except Exception:
-            pass
-        # 版本号从文件名/签名无从获取, 用文件大小与日期标识
+        # 版本号从 PE 资源读, 文件名里带上真实版本, 列表才能按版本分组。
+        ver = file_version(dll) or "unknown"
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         digest = _sha256_file(dll)[:8]
-        dst = DIR_BACKUP / f"{dll.name}.{ver}.{ts}.{digest}.bak"
+        dst = DIR_BACKUP / f"{dll.name}.{ver}.{ts}.{reason}.{digest}.bak"
+
+        # 同一秒内重复调用会撞名, 加后缀防止互相覆盖
+        n = 1
+        while dst.is_file():
+            dst = DIR_BACKUP / f"{dll.name}.{ver}.{ts}.{reason}.{digest}.{n}.bak"
+            n += 1
+
         shutil.copy2(dll, dst)
-        log(f"已备份原版 -> {dst}")
-        return dst, f"已创建备份: {dst.name}"
+        pristine = is_pristine(dll)
+        log(f"已备份{'原版' if pristine else '当前状态'} -> {dst}")
+
+        # 备份完顺手清理超额的"改过的"备份(原版不计入、不删除)
+        removed = trim_backups()
+        extra = f"; 清理了 {removed} 份旧备份" if removed else ""
+        return dst, f"已备份{'原版' if pristine else '当前状态'}: {dst.name}{extra}"
     except Exception as e:
         raise V6PacError(f"创建备份失败: {e}")
+
+
+# 改过的备份最多留几份。原版备份不计入这个数, 也永不删除。
+KEEP_MODIFIED = 10
+
+
+def is_original_backup(path: Path) -> bool:
+    """签名有效 = 官方原版, 不可删除。"""
+    try:
+        kind, _ = signature_status(path)
+        return kind == "Valid"
+    except Exception:
+        return False
+
+
+def trim_backups(keep: int = KEEP_MODIFIED) -> int:
+    """
+    删除超额的非原版备份, 返回删除数量。
+
+    只删"改过的"备份(签名无效)。原版备份无论多少都保留 —— 它是升级前
+    还原唯一的可靠来源, 删掉就再也拿不回来了。
+    """
+    removed = 0
+    try:
+        modified = []
+        for p in DIR_BACKUP.glob("*.bak"):
+            if is_original_backup(p):
+                continue
+            try:
+                modified.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        modified.sort(reverse=True)          # 新的在前
+        for _, p in modified[keep:]:
+            try:
+                p.unlink()
+                removed += 1
+                log(f"清理旧备份: {p.name}")
+            except OSError:
+                pass
+    except Exception as e:
+        log(f"trim_backups 失败: {e}")
+    return removed
+
+
+def delete_backup(path: Path) -> tuple[bool, str]:
+    """
+    删除一份备份。原版(签名有效)拒绝删除。
+
+    返回 (是否成功, 说明)。
+    """
+    p = Path(path)
+    if not p.is_file():
+        return False, "备份文件不存在"
+    if is_original_backup(p):
+        return False, ("这是官方原版备份，不能删除。\n"
+                       "它是升级前还原唯一可靠的来源。")
+    try:
+        p.unlink()
+        log(f"已删除备份: {p.name}")
+        return True, f"已删除: {p.name}"
+    except Exception as e:
+        return False, f"删除失败: {e}"
+
+
+@dataclass
+class BackupInfo:
+    """备份列表里的一行。"""
+    path: Path
+    version: str            # PE 版本号, 读不到时为 "unknown"
+    created: datetime | None
+    size: int
+    reason: str             # apply / upgrade / manual / unknown
+    is_current_version: bool = False   # 与当前 DLL 版本是否一致
+
+    @property
+    def reason_label(self) -> str:
+        return {"apply": "应用前", "upgrade": "升级前",
+                "manual": "手动"}.get(self.reason, "未知")
+
+    @property
+    def size_label(self) -> str:
+        mb = self.size / (1024 * 1024)
+        return f"{mb:.2f} MB"
+
+
+def list_backups(dll: Path | None = None) -> list[BackupInfo]:
+    """
+    列出全部备份, 按时间从新到旧。
+
+    解析文件名 `<dll>.<版本>.<时间戳>.<来源>.<摘要>.bak`。早期版本没有
+    来源段(文件名是 `<dll>.<版本>.<时间戳>.<摘要>.bak`), 那时按 unknown
+    处理 —— 不能因为改了命名规则就让旧备份从列表里消失。
+
+    版本号优先读 PE 资源(可信); 读不出来才退回文件名里的那一段。
+    """
+    out: list[BackupInfo] = []
+    try:
+        files = sorted(DIR_BACKUP.glob("*.bak"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return out
+
+    cur_ver = file_version(dll) if dll else None
+
+    for p in files:
+        try:
+            st = p.stat()
+            parts = p.name.split(".")
+            # 文件名以 .bak 结尾; 倒数第二段是摘要, 往常才是来源/时间戳
+            stem = p.name[:-4] if p.name.endswith(".bak") else p.name
+            stem = stem[len(p.stem.split(".")[0]) + 1:] if "." in stem else stem
+            seg = stem.split(".")
+            version = "unknown"
+            reason = "unknown"
+            created = None
+            # 时间戳格式 YYYYMMDD-HHMMSS, 找它来确定各段含义
+            ts_idx = None
+            for i, s in enumerate(seg):
+                if len(s) == 15 and s[8] == "-" and s[:8].isdigit():
+                    ts_idx = i
+                    break
+            if ts_idx is not None:
+                try:
+                    created = datetime.strptime(seg[ts_idx], "%Y%m%d-%H%M%S")
+                except ValueError:
+                    created = None
+                if ts_idx >= 1:
+                    version = seg[ts_idx - 1]
+                if ts_idx + 1 < len(seg) and seg[ts_idx + 1] in (
+                        "apply", "upgrade", "manual"):
+                    reason = seg[ts_idx + 1]
+            else:
+                created = datetime.fromtimestamp(st.st_mtime)
+
+            real = file_version(p)
+            if real:
+                version = real
+
+            out.append(BackupInfo(
+                path=p,
+                version=version,
+                created=created or datetime.fromtimestamp(st.st_mtime),
+                size=st.st_size,
+                reason=reason,
+                is_current_version=bool(cur_ver) and version == cur_ver,
+            ))
+        except Exception:
+            continue
+    return out
 
 
 def restore_backup(dll: Path, backup: Path | None = None) -> str:
@@ -482,15 +909,52 @@ def prepare_for_upgrade(dll: Path) -> tuple[bool, str]:
     if st == "Valid":
         return False, "当前 DLL 已是原版, 无需还原。"
 
-    bk = backup_path_for(dll)
-    if not bk or not bk.is_file():
+    # 这里要的是"能还给安装包一个原版 DLL", 所以必须挑**签名有效**的备份。
+    #
+    # 不能用 backup_path_for(): 它按"与当前 DLL 同版本"来选, 而当前 DLL
+    # 恰好是被改过的 —— 于是它会把另一份同样被改过、签名同样失效的备份
+    # 拷回去(本机实测: 6.13.3.1 那份"圆角测试前"也是 NotSigned)。
+    # 还原前后都是非原版, 这一步就白做了。
+    #
+    # 顺序: 先按版本匹配找有效签名的, 再退到任何版本的有效签名备份。
+    cur_ver = file_version(dll)
+    cands = [b for b in list_backups(dll) if b.path.is_file()]
+    verified = []
+    for b in cands:
+        try:
+            s, _ = signature_status(b.path)
+        except Exception:
+            s = None
+        if s == "Valid":
+            verified.append(b)
+
+    bk = None
+    for b in verified:
+        if cur_ver and b.version == cur_ver:
+            bk = b.path
+            break
+    if bk is None and verified:
+        # 同版本没有原版时, 用任意一个原版也比还原成改过的版本强;
+        # 版本不同会在返回消息里说明, 由用户决定是否继续升级。
+        bk = verified[0].path
+
+    if bk is None:
         raise V6PacError(
-            "需要还原, 但没有可用的原版备份。\n\n"
-            "无法在升级前把 DLL 恢复成原版。\n"
+            "需要还原, 但备份里没有**原版**(签名有效)的 DLL。\n\n"
+            "现有的备份都是被修改过的, 拷回去仍然是改过的文件, "
+            "对升级没有帮助。\n"
             "建议先手动从 VOCALOID6 安装包修复安装。")
 
     msg = restore_backup(dll, bk)
     clear_applied()
+
+    # 说明还原的是哪一份, 以及版本是否和原来一致 —— 用户需要知道升级
+    # 面对的 DLL 是不是同一个版本。
+    bk_ver = file_version(bk)
+    note = f"\n还原自: {bk.name}"
+    if bk_ver and cur_ver and bk_ver != cur_ver:
+        note += (f"\n注意: 这份备份是 {bk_ver}, 而还原前的 DLL 是 {cur_ver}。"
+                 f"\n同版本没有原版备份, 只能退回更早的原版。")
 
     # 记录"曾经应用过封面", 升级后好提示重新应用
     state = load_state()
@@ -511,7 +975,7 @@ def prepare_for_upgrade(dll: Path) -> tuple[bool, str]:
         except Exception as e:
             log(f"写入升级标记失败: {e}")
 
-    return True, f"{msg}\n可以开始安装 VOCALOID6 新版了。"
+    return True, f"{msg}{note}\n可以开始安装 VOCALOID6 新版了。"
 
 
 def pending_upgrade_restore() -> dict[str, Any] | None:
@@ -702,8 +1166,9 @@ def apply_cover(
     if not targets:
         raise V6PacError("没有指定任何要替换的内容。")
 
-    # 1) 备份
-    bk, bk_msg = ensure_backup(dll)
+    # 1) 备份 —— 每次应用前都把当前状态存一份, 这样能回退到上一个封面。
+    # (旧版是"已有备份就跳过", 结果换第二次封面时没有上一版可退。)
+    bk, bk_msg = ensure_backup(dll, reason="apply")
     log(bk_msg)
 
     info_before = read_info(dll)
@@ -789,7 +1254,10 @@ def restore_default(dll: Path) -> ApplyResult:
     恢复为预设的零售版封面。
     若存在原版备份且当前 DLL 除封面外无其他改动需求, 直接还原备份最干净。
     """
-    preset = DIR_PRESET / "splash.png"
+    preset = preset_dir_for(dll) / "splash.png"
+    if not preset.is_file():
+        # 该版本还没导出过, 现导一次
+        export_presets(dll)
     if not preset.is_file():
         raise V6PacError(
             f"缺少预设封面: {preset}\n"
@@ -798,7 +1266,22 @@ def restore_default(dll: Path) -> ApplyResult:
     return apply_cover(dll, splash=preset)
 
 
+def preset_dir_for(dll: Path) -> Path:
+    """
+    某个 DLL 的默认封面目录: 预设\\<版本>\\
+
+    为什么按版本分开: 切换目标 DLL 时不能把另一份的封面当成"默认"覆盖过来。
+    本机 C 盘是 6.13.3.1、E 盘是 6.13.0.1, 两份的官方封面不同, 混在一个
+    目录里会让"载入默认封面"给出错误的那一张。
+    """
+    ver = file_version(dll) or "unknown"
+    safe = "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in ver)
+    return DIR_PRESET / safe
+
+
 def export_presets(dll: Path) -> list[dict[str, Any]]:
-    """从 DLL 导出默认封面到预设目录。"""
-    raw = _run_v6res(["extract", str(dll), str(DIR_PRESET)])
+    """从 DLL 导出默认封面到该版本自己的预设目录。"""
+    target = preset_dir_for(dll)
+    target.mkdir(parents=True, exist_ok=True)
+    raw = _run_v6res(["extract", str(dll), str(target)])
     return raw if isinstance(raw, list) else []

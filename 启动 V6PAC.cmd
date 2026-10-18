@@ -7,7 +7,7 @@ rem ============================================================
 
 setlocal
 set "HERE=%~dp0"
-set "SCRIPT=%HERE%V6PAC.py"
+set "SCRIPT=%HERE%webui.py"
 
 if not exist "%SCRIPT%" (
     echo.
@@ -131,15 +131,59 @@ if errorlevel 1 (
     echo.
 )
 
-rem tkinter cannot be pip-installed; check it too so the error is actionable.
-"%PY%" %PYARG% -c "import tkinter" >nul 2>&1
+rem ------------------------------------------------------------
+rem  pywebview is the UI layer (it hosts the page in the system
+rem  WebView2 runtime). Unlike the old tkinter check this one CAN be
+rem  fixed with pip, so offer to do it.
+rem ------------------------------------------------------------
+"%PY%" %PYARG% -c "import webview" >nul 2>&1
 if errorlevel 1 (
     echo.
-    echo   [MISSING] tkinter is not available for this Python.
-    echo             It is the GUI toolkit and CANNOT be installed with pip.
+    echo   [MISSING] pywebview is not installed for this Python.
+    echo             It provides the window that shows the interface.
     echo.
-    echo   Fix: re-run the Python installer ^> Modify, then tick
-    echo        "tcl/tk and IDLE", and finish the setup.
+    echo   Install it now? This runs:
+    echo       %PYSHOW% -m pip install pywebview
+    echo.
+    choice /c YN /n /m "   Proceed? [Y/N] "
+    if errorlevel 2 (
+        echo.
+        echo   Skipped. Install it manually, then run this launcher again:
+        echo       %PYSHOW% -m pip install pywebview
+        echo.
+        pause
+        exit /b 1
+    )
+    echo.
+    "%PY%" %PYARG% -m pip install pywebview
+    if errorlevel 1 (
+        echo.
+        echo   [ERROR] pip install failed. Common causes:
+        echo     - no internet access
+        echo     - behind a proxy, add:    --proxy http://host:port
+        echo.
+        pause
+        exit /b 1
+    )
+    echo.
+    echo   pywebview installed.
+    echo.
+)
+
+rem ------------------------------------------------------------
+rem  WebView2 Runtime renders the page. It ships with Windows 10/11,
+rem  but detect it by its install folder instead of assuming.
+rem ------------------------------------------------------------
+set "WV2="
+if exist "%ProgramFiles(x86)%\Microsoft\EdgeWebView\Application" set "WV2=1"
+if exist "%ProgramFiles%\Microsoft\EdgeWebView\Application" set "WV2=1"
+if not defined WV2 (
+    echo.
+    echo   [MISSING] WebView2 Runtime is not installed.
+    echo             The interface is rendered by it.
+    echo.
+    echo   Install the Evergreen Runtime from Microsoft:
+    echo       https://developer.microsoft.com/microsoft-edge/webview2/
     echo.
     pause
     exit /b 1

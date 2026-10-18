@@ -35,8 +35,11 @@ class App(tk.Tk):
         super().__init__()
         self.title(f"{APP_TITLE}  v{APP_VER}")
         self.configure(bg=BG)
-        self.geometry("1000x860")
-        self.minsize(900, 760)
+        # 窗口开到接近整个工作区高度, 但不超出: 之前 1000x860 在本机
+        # 1707x1019 的工作区里正好卡满, 任务栏一出现就被切掉底部。
+        # 这里按工作区算, 留出任务栏与边距。
+        self.geometry(self._initial_geometry())
+        self.minsize(880, 680)
 
         # --- 状态 ---
         self.dll: Path | None = None
@@ -134,6 +137,8 @@ class App(tk.Tk):
         mid = ttk.Frame(root)
         mid.pack(fill="both", expand=True, pady=(10, 0))
 
+        # 左栏：取景 + 缩放。给固定最小宽度 —— 这里的按钮是固定的，
+        # 让它和右栏平分反而会把右侧预览挤窄。
         left = ttk.LabelFrame(mid, text=" 选择图片 ", padding=8)
         left.pack(side="left", fill="both", expand=True)
 
@@ -158,7 +163,7 @@ class App(tk.Tk):
 
         # 缩放控制
         zr = ttk.Frame(left); zr.pack(fill="x", pady=(6, 0))
-        ttk.Label(zr, text="缩放:").pack(side="left")
+        ttk.Label(zr, text="缩放:", style="Dim.TLabel").pack(side="left")
         self.var_zoom = tk.DoubleVar(value=1.0)
         sc = ttk.Scale(zr, from_=1.0, to=4.0, variable=self.var_zoom,
                        command=lambda *_: self._on_zoom_change())
@@ -169,6 +174,14 @@ class App(tk.Tk):
         # ---------- 右侧: 封面效果预览 (放大) ----------
         eff = ttk.LabelFrame(mid, text=" 封面效果预览 ", padding=8)
         eff.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        # 两栏各要一个下限: 都靠 expand 均分时, 控件较少的一侧会把另一侧
+        # 压窄到内容放不下(圆角那行曾被压得只剩"关闭"两个字)。
+        left.pack_configure(padx=(0, 0))
+        try:
+            left.configure(width=480)
+            eff.configure(width=460)
+        except Exception:
+            pass
 
         ttk.Label(eff, text=f"{vimg.TARGET_W} × {vimg.TARGET_H}  (最终封面)",
                   style="Dim.TLabel").pack(anchor="w")
@@ -178,22 +191,35 @@ class App(tk.Tk):
         # 标注"实验性": 实测在默认窗口下四角会变黑, 不是所有人都想要的效果。
         row_corner = ttk.Frame(eff)
         row_corner.pack(fill="x", pady=(6, 0))
-        ttk.Label(row_corner, text="圆角（实验性）",
+        ttk.Label(row_corner, text="圆角",
                   style="Dim.TLabel").pack(side="left")
+        ttk.Label(row_corner, text="（实验性）", foreground=WARN,
+                  background=BG).pack(side="left")
         self.var_corner = tk.DoubleVar(value=0.0)
         self.scale_corner = ttk.Scale(row_corner, from_=0.0, to=8.0,
-                                      orient="horizontal", length=180,
+                                      orient="horizontal", length=140,
                                       variable=self.var_corner,
                                       command=lambda _v: self._on_corner_change())
         self.scale_corner.pack(side="left", padx=(8, 8))
-        self.lbl_corner = ttk.Label(row_corner, text="关闭", width=10,
+        self.lbl_corner = ttk.Label(row_corner, text="关闭", width=9,
                                     style="Dim.TLabel")
         self.lbl_corner.pack(side="left")
 
-        ttk.Label(eff, style="Dim.TLabel", justify="left",
-                  text=("⚠️ 实验性：VOCALOID6 启动窗口不透明，四角会显示为"
-                        "黑色而不是透出桌面。预览里的黑色即最终效果。")
-                  ).pack(anchor="w", pady=(2, 0))
+        # 说明文字。wraplength 写死会在栏宽变化时溢出(实测 340 仍然把
+        # 最后几个字挤到边界外), 所以改用 <Configure> 事件跟随实际宽度重算,
+        # 并且文字本身也精简过。
+        warn = ttk.Label(eff, style="Dim.TLabel", justify="left",
+                         foreground=WARN, background=BG,
+                         text="⚠ 四角会变黑，不会透出桌面。")
+        warn.pack(anchor="w", pady=(4, 0), fill="x")
+
+        def _rewrap(ev, lbl=warn):
+            try:
+                lbl.configure(wraplength=max(ev.width - 8, 120))
+            except Exception:
+                pass
+
+        eff.bind("<Configure>", _rewrap, add="+")
 
         self.canvas_eff = tk.Canvas(eff, bg="#101014", highlightthickness=1,
                                     highlightbackground="#3a3a42",
@@ -249,8 +275,19 @@ class App(tk.Tk):
         except Exception:
             pass
 
+        # 画布的 "这里会显示封面" 占位要等布局出来才画得准;
+        # <Configure> 在部分 tk 版本上不保证首次触发, 所以显式排一次。
+        self.after(120, self._do_effect)
+
+        # 关窗口时记住尺寸, 下次直接按这个开 —— 用户拉过一次就不该再拉。
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
         # 升级前还原过 -> 若升级已完成, 提示重新应用封面
         self.after(500, self._check_pending_upgrade)
+
+    def _on_close(self) -> None:
+        self._remember_geometry()
+        self.destroy()
 
     def _check_permission(self) -> None:
         """启动时检测写入权限, 权限不足则提示并可一键提权重启。"""
@@ -268,8 +305,12 @@ class App(tk.Tk):
             return
 
         if why == "denied" and not core.is_admin():
-            self._set_msg("权限不足: 需要以管理员身份运行", WARN)
-            self.after(400, self._ask_elevate)
+            # 以前这里 400ms 后弹一个"是否以管理员身份重启"的模态框。
+            # 结果是每次打开工具都先被挡一次, 哪怕只是看看当前封面 ——
+            # 而提权只在真正写入时才有意义。现在只把状态写在状态栏;
+            # on_apply() 里本来就有一次完整的权限判断与提示。
+            self._set_msg("只读模式：查看和预览可用，「应用封面」需要管理员权限", WARN)
+            self._needs_admin = True
 
     def _ask_elevate(self) -> None:
         msg = ("需要管理员权限\n\n"
@@ -335,6 +376,78 @@ class App(tk.Tk):
 
     def _set_msg(self, text: str, color: str = FG_DIM) -> None:
         self.var_msg.set(text.replace("\n", " "))
+
+    def _initial_geometry(self) -> str:
+        """
+        开局尺寸: 优先用上次关闭时的大小和位置(存在 状态/state.json), 没有才按屏幕算。
+
+        ⚠️ tk 的 geometry() 数值是物理像素, 而控件会被 `tk scaling` 放大。
+        本机 scaling≈1.333; 第一版按"逻辑像素"算宽度, 实际窗口比预期宽 1/3
+        并顶出屏幕右侧。所以这里算出来的"想要的物理尺寸"必须除以缩放比,
+        再交给 geometry()。
+        """
+        try:
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            try:
+                scale = float(self.tk.call("tk", "scaling")) / 1.333
+            except Exception:
+                scale = 1.0
+            if scale <= 0:
+                scale = 1.0
+
+            # 上次的窗口状态。用户拉过之后就该记住, 而不是每次回到默认值。
+            saved = None
+            try:
+                saved = core.load_state().get("window")
+            except Exception:
+                saved = None
+            if isinstance(saved, dict):
+                pw = int(saved.get("w") or 0)
+                ph = int(saved.get("h") or 0)
+                px = saved.get("x")
+                py = saved.get("y")
+                # 只接受还落在屏幕内、且不小于最小尺寸的尺寸
+                if pw >= 880 and ph >= 680 and pw <= sw and ph <= sh:
+                    w = int(pw / scale)
+                    h = int(ph / scale)
+                    if isinstance(px, int) and isinstance(py, int):
+                        if -8 <= px < sw - 100 and -8 <= py < sh - 100:
+                            return f"{w}x{h}+{px}+{py}"
+                    return f"{w}x{h}"
+
+            usable_h = max(sh - 60, 600)
+            phys_w = min(max(sw * 0.92, 860), 1400)
+            phys_h = min(max(usable_h * 0.90, 680), usable_h)
+
+            w = int(phys_w / scale)
+            h = int(phys_h / scale)
+            x = max((sw - int(phys_w)) // 2, 0)
+            y = max((usable_h - int(phys_h)) // 2, 0)
+            return f"{w}x{h}+{x}+{y}"
+        except Exception:
+            return "760x600"
+
+    def _remember_geometry(self) -> None:
+        """把当前窗口尺寸/位置写进 状态/state.json(关闭时调用)。"""
+        try:
+            # 最大化/最小化时不记尺寸, 否则下次会用奇怪的值开局
+            if self.state() != "normal":
+                return
+            # geometry() 是物理像素; 存物理像素, 开局时再按当时的缩放比换算,
+            # 这样换了显示器缩放也仍然合理。
+            self.update_idletasks()
+            w = self.winfo_width()
+            h = self.winfo_height()
+            x = self.winfo_x()
+            y = self.winfo_y()
+            if w < 880 or h < 680:
+                return
+            st = core.load_state()
+            st["window"] = {"w": w, "h": h, "x": x, "y": y}
+            core.save_state(st)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ 选图
     def on_browse_dll(self) -> None:
@@ -545,10 +658,16 @@ class App(tk.Tk):
         self._eff_job = None
         c = self.canvas_eff
         c.delete("all")
-        if not self.src_image or not self.view:
-            return
         cw = max(c.winfo_width(), 1)
         ch = max(c.winfo_height(), 1)
+        if not self.src_image or not self.view:
+            # 空状态给一句话, 否则这里就是一块没有解释的黑方块,
+            # 和左边的"选择图片后在此预览"不对称。
+            c.create_text(cw // 2, ch // 2,
+                          text="最终封面会在这里显示",
+                          fill="#55555c",
+                          font=("Microsoft YaHei UI", 11))
+            return
 
         # 按画布可用空间等比摆放 (保持 1200:714), 尽量占满
         pad = 4
@@ -788,22 +907,21 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------ 还原
     def on_restore_backup(self) -> None:
+        """打开备份历史, 由用户挑一个版本还原。
+
+        以前这里直接用 backup_path_for() 挑一份就还原 —— 那个函数只返回
+        "某个"备份, 用户看不到有几份、分别是什么版本。这台机器上就因为
+        盲目还原把 DLL 换成了更老的 6.13.0.1。改成列出来让人自己选。
+        """
         if not self.dll:
             return
-        bk = core.backup_path_for(self.dll)
-        if not bk:
+        items = core.list_backups(self.dll)
+        if not items:
             messagebox.showwarning(APP_TITLE, "没有找到备份文件。")
             return
-        if not messagebox.askyesno(
-                APP_TITLE,
-                f"将用备份还原 VOCALOID6.dll:\n\n{bk.name}\n\n"
-                "请确保 VOCALOID6 已完全退出。确定继续吗?"):
-            return
-        try:
-            msg = core.restore_backup(self.dll, bk)
-        except core.V6PacError as e:
-            messagebox.showerror(APP_TITLE, str(e))
-            return
+        _BackupDialog(self, self.dll, items, on_done=self._after_restore)
+
+    def _after_restore(self, msg: str) -> None:
         core.clear_applied()
         self._set_msg(msg, OK)
         self.refresh()
@@ -924,6 +1042,109 @@ def _try_elevate() -> bool:
         return r > 32
     except Exception:
         return False
+
+
+class _BackupDialog(tk.Toplevel):
+    """
+    备份历史: 按版本列出全部备份, 每行一个"还原"。
+
+    为什么要这个窗口: 原来的"从备份还原"按钮直接取 backup_path_for() 的结果,
+    用户看不到商店里到底有几份、都是什么版本。本机就因此把 6.13.3.1 的 DLL
+    换成了更老的 6.13.0.1 —— 启动画面右下角的版本号跟着退回去。
+    列表把版本、时间、来源、大小都摆出来, 与当前 DLL 同版本的那行还额外标注。
+    """
+
+    def __init__(self, master, dll: Path, items: list, on_done):
+        super().__init__(master)
+        self.title("备份历史")
+        self.configure(bg=BG)
+        self.transient(master)
+        self.resizable(True, True)
+        self._dll = dll
+        self._items = items
+        self._on_done = on_done
+
+        cur = core.file_version(dll) or "?"
+        head = ttk.Frame(self)
+        head.pack(fill="x", padx=14, pady=(12, 6))
+        ttk.Label(head, text=f"共 {len(items)} 份备份",
+                  style="Head.TLabel").pack(side="left")
+        ttk.Label(head, text=f"　当前 DLL 版本 {cur}",
+                  style="Dim.TLabel").pack(side="left")
+
+        wrap = ttk.Frame(self)
+        wrap.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+
+        canvas = tk.Canvas(wrap, bg=BG, highlightthickness=0, height=320)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>",
+                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        for b in items:
+            inner.pack_slot = None
+            self._make_row(inner, b)
+
+        foot = ttk.Frame(self)
+        foot.pack(fill="x", padx=14, pady=(0, 12))
+        ttk.Button(foot, text="关闭", command=self.destroy).pack(side="right")
+
+        self.update_idletasks()
+        self.minsize(560, 300)
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+
+    def _make_row(self, parent, b) -> None:
+        row = ttk.LabelFrame(parent, padding=8)
+        row.pack(fill="x", pady=3)
+
+        top = ttk.Frame(row)
+        top.pack(fill="x")
+
+        ver = ttk.Label(top, text=f"v{b.version}", style="Head.TLabel")
+        ver.pack(side="left")
+
+        if b.is_current_version:
+            ttk.Label(top, text="  当前版本", foreground=OK,
+                      background=BG).pack(side="left")
+
+        ttk.Label(top, text=f"  {b.reason_label}", foreground=FG_DIM,
+                  background=BG).pack(side="left")
+
+        ttk.Label(top, text=b.created.strftime("%Y-%m-%d %H:%M:%S"),
+                  style="Dim.TLabel").pack(side="left", padx=(12, 0))
+
+        ttk.Label(top, text=b.size_label, style="Dim.TLabel").pack(
+            side="left", padx=(12, 0))
+
+        btn = ttk.Button(top, text="还原",
+                         command=lambda bb=b: self._restore(bb))
+        btn.pack(side="right")
+
+        ttk.Label(row, text=b.path.name, style="Dim.TLabel").pack(
+            anchor="w", pady=(4, 0))
+
+    def _restore(self, b) -> None:
+        if not messagebox.askyesno(
+                APP_TITLE,
+                f"将把 VOCALOID6.dll 还原为:\n\n"
+                f"版本 {b.version}  ({b.reason_label})\n"
+                f"{b.created.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                "请确保 VOCALOID6 已完全退出。确定继续吗?", parent=self):
+            return
+        try:
+            msg = core.restore_backup(self._dll, b.path)
+        except core.V6PacError as e:
+            messagebox.showerror(APP_TITLE, str(e), parent=self)
+            return
+        self.destroy()
+        self._on_done(msg)
 
 
 def main() -> int:

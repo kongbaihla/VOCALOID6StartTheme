@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>VOCALOID6 启动封面替换工具</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- 侧栏 -->
+  <aside class="side">
+    <div class="brand"><span class="dot"></span>V6PAC</div>
+
+    <nav class="nav-stack">
+      <div class="nav-label">封面</div>
+      <div class="nav on" data-page="cover"><span class="ico">◧</span>替换封面</div>
+      <div class="nav" data-page="backup"><span class="ico">↺</span>备份历史</div>
+
+      <div class="nav-label">操作</div>
+      <div class="nav" id="nav-restore-default"><span class="ico">⟲</span>还原默认封面</div>
+      <div class="nav" id="nav-upgrade"><span class="ico">⬆</span>升级前还原</div>
+
+      <!-- 当前目标：只读展示，样式与其他导航项一致。
+           实际切换在右侧“目标文件”卡里(卡片式，见 #dll-picker)。 -->
+      <div class="nav-label">目标</div>
+      <div class="nav nav-target" id="nav-target" title="">
+        <span class="ico">◈</span><span id="target-label">—</span>
+      </div>
+    </nav>
+
+    <!-- 关于钉在左下角 -->
+    <div class="nav about-pin" id="nav-about"><span class="ico">？</span>关于</div>
+  </aside>
+
+  <main class="main">
+
+    <!-- 顶部目标文件 (两页共用) -->
+    <section class="card" id="card-target">
+      <div class="h">
+        <h2>目标文件</h2>
+        <span class="sub">VOCALOID6.dll</span>
+      </div>
+      <div class="dll-row">
+        <span class="dll-path" id="dll-path">加载中…</span>
+        <span class="badge" id="badge-status">—</span>
+        <span class="badge" id="badge-sig">—</span>
+      </div>
+      <div class="meta">
+        <span>封面上限 <b id="meta-cap">—</b></span>
+        <span>文件 <b id="meta-size">—</b></span>
+        <span>版本 <b id="meta-ver">—</b></span>
+      </div>
+      <!-- 多个 VOCALOID6 时列出全部候选，点卡片切换 -->
+      <div class="dll-picker" id="dll-picker" hidden></div>
+    </section>
+
+    <!-- 权限提示条: 只在没有管理员权限时出现 -->
+    <div class="admin-bar" id="admin-bar" hidden>
+      <span class="ico">⚠</span>
+      <span class="txt">当前没有管理员权限，无法写入 VOCALOID6.dll。查看和预览不受影响。</span>
+      <span class="spacer"></span>
+      <button class="btn primary" id="btn-elevate">以管理员身份重启</button>
+    </div>
+
+    <!-- 页面容器 -->
+    <div class="pages">
+
+      <!-- 页面 1: 替换封面 -->
+      <section class="page" id="page-cover">
+        <div class="work">
+          <section class="col">
+            <div class="row">
+              <button class="btn primary" id="btn-pick">选择图片…</button>
+              <button class="btn" id="btn-default">载入默认封面</button>
+              <span class="spacer"></span>
+              <button class="btn ghost" id="btn-center">居中</button>
+            </div>
+
+            <div class="file-line" id="file-line">尚未选择图片</div>
+
+            <div class="canvas-wrap" id="crop-wrap">
+              <img id="crop-img" alt="">
+              <div class="crop-box" id="crop-box" hidden>
+                <span class="grid h1"></span><span class="grid h2"></span>
+                <span class="grid v1"></span><span class="grid v2"></span>
+              </div>
+              <span class="empty" id="crop-empty">选择图片后在此预览</span>
+            </div>
+
+            <div class="slider-row">
+              <label>缩放</label>
+              <input type="range" id="zoom" min="1" max="4" step="0.02" value="1">
+              <span class="val" id="zoom-val">1.00×</span>
+            </div>
+            <div class="hint dim">拖动取景框 · 滚轮缩放</div>
+          </section>
+
+          <section class="col">
+            <div class="row">
+              <span class="file-line">1200 × 714 · 最终封面</span>
+            </div>
+
+            <div class="row corner-row">
+              <label>圆角</label>
+              <span class="badge warn">实验性</span>
+              <input type="range" id="corner" min="0" max="8" step="0.5" value="0">
+              <span class="val" id="corner-val">关闭</span>
+            </div>
+            <div class="hint">⚠ 四角会变黑，不会透出桌面</div>
+
+            <div class="canvas-wrap">
+              <img id="effect-img" alt="">
+              <span class="empty" id="effect-empty">最终封面会在这里显示</span>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- 页面 2: 备份历史 -->
+      <section class="page" id="page-backup" hidden>
+        <div class="row" style="margin-bottom:10px">
+          <span class="file-line" id="bak-count">—</span>
+          <span class="spacer"></span>
+          <button class="btn ghost" id="btn-bak-refresh">刷新</button>
+        </div>
+        <div class="bak-list" id="bak-list"></div>
+      </section>
+
+    </div>
+
+    <!-- 底部 -->
+    <div class="out">
+      <span class="lbl">状态</span>
+      <span class="val" id="status-msg">就绪</span>
+      <span class="spacer"></span>
+      <button class="btn primary" id="btn-apply" disabled>应用封面</button>
+    </div>
+
+  </main>
+</div>
+
+<script src="vendor/gsap.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

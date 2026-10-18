@@ -15,3 +15,9 @@ python/
 obj/
 *.pdb
 *.log
+build/
+dist/
+*.spec
+
+# 预设封面(从 DLL 导出, 每台机器不同)
+预设/

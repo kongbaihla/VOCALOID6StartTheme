@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageTk
+from PIL import Image, ImageChops, ImageDraw
 
 # 封面目标尺寸 —— 与 splashwindow.baml 的布局匹配, 不可随意更改
 TARGET_W, TARGET_H = 1200, 714
@@ -226,7 +226,15 @@ def render_crop_preview(img: Image.Image, base: Image.Image, view: CropView,
     return cropped.resize((out_w, out_h), Image.BILINEAR)
 
 
-def to_tk(img: Image.Image) -> ImageTk.PhotoImage:
+def to_tk(img):
+    """
+    转成 tkinter 的 PhotoImage。**仅供旧版 tkinter 界面使用**。
+
+    ImageTk 在导入时就会拉起 tkinter, 而打包成 exe 的 WebView2 版本
+    不需要 tkinter, 而且把它排除掉能让体积小一截。所以这里延迟导入 ——
+    只要没人调用这个函数, tkinter 就不会被加载。
+    """
+    from PIL import ImageTk
     return ImageTk.PhotoImage(img)
 
 

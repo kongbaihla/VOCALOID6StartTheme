@@ -1,0 +1,400 @@
+/* 配色取自 DSH 界面实测像素:
+ *   主区 #151517(最暗) < 侧栏 #1B1B1C < 卡片 #212123(最亮)
+ * 层次靠底色亮度差表达, 边框尽量不用 —— 这是 DSH 那种"工作台"观感的核心。
+ * 强调色保留 DSH 的蓝 #4395CD, 但只用在主按钮和选中态。 */
+:root {
+  --bg: #151517;          /* 主区 */
+  --panel: #1b1b1c;       /* 侧栏 */
+  --card: #212123;        /* 卡片 */
+  --card-hi: #27272a;     /* 卡片内的次级层(悬停/输入框) */
+  --edge: #2a2a2d;        /* 极弱分隔 */
+  --edge-soft: #34343a;
+  --fg: #e8e8ea;
+  --fg-dim: #9b9ba2;
+  --fg-faint: #6a6a72;
+  --accent: #4395cd;
+  --accent-hi: #4fa5dd;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --err: #f87171;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+.app { display: flex; height: 100%; }
+
+/* ---------------- 侧栏 ---------------- */
+.side {
+  width: 168px; flex: 0 0 168px;
+  background: var(--panel);
+  border-right: 1px solid var(--edge);
+  padding: 16px 10px 12px;
+  display: flex; flex-direction: column;
+}
+/* 导航在上, 关于被 margin-top:auto 推到最底部 —— 这样窗口多高它都在左下角。 */
+.nav-stack { display: flex; flex-direction: column; gap: 2px; }
+.brand {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 10px 14px;
+  font-size: 13.5px; font-weight: 600;
+}
+.brand .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(74,158,255,.65);
+}
+.nav-label {
+  padding: 10px 10px 5px;
+  font-size: 11px; color: var(--fg-faint);
+}
+.nav {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; border-radius: 7px;
+  color: var(--fg-dim); cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.nav:hover { background: #232325; color: var(--fg); }
+.nav.on { background: #2a2a2e; color: var(--fg); }
+.nav .ico { width: 14px; text-align: center; opacity: .8; font-size: 12px; }
+
+.about-pin {
+  margin-top: auto;               /* 钉在左下角 */
+  border-top: 1px solid var(--edge);
+  border-radius: 0 0 7px 7px;
+  padding-top: 9px;
+  margin-bottom: 2px;
+}
+
+/* ---------------- 主区 ---------------- */
+.main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  padding: 16px 20px 0;
+  gap: 14px; overflow: hidden;
+}
+
+/* ---------------- 页面切换 ---------------- */
+/* 两个页面叠在同一格里: 切页时只做透明度/位移过渡, 不会有布局跳动。
+ *
+ * ⚠️ .pages 必须显式给 width。它只有 flex:1(主轴纵向), 宽度本该由父级拉伸,
+ * 但里面全是 position:absolute 的子元素 —— 绝对定位不参与父级尺寸计算,
+ * 于是 .pages 宽度塌成 0, 再传给 .work 的 grid 就是 0 宽, 右栏被挤出窗口
+ * (实测 innerW=906 但 work=0 / col0=0 / col1=0)。 */
+.pages {
+  flex: 1; min-height: 0;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+.page {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+.page[hidden] { display: none; }
+#page-backup { overflow: hidden; }
+
+.card {
+  background: var(--card);
+  border: 1px solid transparent;   /* 不用线, 靠底色差分层 */
+  border-radius: 11px;
+  padding: 13px 15px;
+}
+.h { display: flex; align-items: baseline; gap: 9px; margin-bottom: 8px; }
+.h h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.h .sub { font-size: 11.5px; color: var(--fg-faint); }
+
+.dll-row { display: flex; align-items: center; gap: 9px; }
+.dll-path {
+  flex: 1; min-width: 0;
+  font-family: Consolas, monospace; font-size: 11.5px;
+  color: var(--fg-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.badge {
+  padding: 2px 9px; border-radius: 999px;
+  font-size: 11px; white-space: nowrap;
+  background: #2a2a33; color: var(--fg-dim);
+}
+.badge.ok   { background: rgba(74,222,128,.12); color: var(--ok); }
+.badge.warn { background: rgba(251,191,36,.12); color: var(--warn); }
+.badge.err  { background: rgba(248,113,113,.12); color: var(--err); }
+
+.meta {
+  display: flex; gap: 16px; margin-top: 8px;
+  font-size: 11.5px; color: var(--fg-faint);
+}
+.meta b { color: var(--fg-dim); font-weight: 500; }
+
+/* ---------------- 工作区 ---------------- */
+.work {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.col { display: flex; flex-direction: column; min-height: 0; gap: 8px; min-width: 0; }
+.row { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
+.spacer { flex: 1; min-width: 0; }
+
+/* ---------------- 按钮 ---------------- */
+.btn {
+  border: 1px solid var(--edge-soft);
+  background: #2a2a2e;
+  color: var(--fg);
+  padding: 6px 13px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .12s, border-color .12s, transform .06s;
+}
+.btn:hover { background: #333338; border-color: #3f3f45; }
+.btn:active { transform: translateY(1px); }
+.btn.primary {
+  background: var(--accent); border-color: transparent; color: #ffffff;
+  font-weight: 600;
+}
+.btn.primary:hover { background: var(--accent-hi); }
+.btn.ghost { background: transparent; }
+.btn:disabled { opacity: .4; cursor: default; transform: none; }
+
+/* ---------------- 画布 ---------------- */
+.canvas-wrap {
+  flex: 1; min-height: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: #101012;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+.canvas-wrap img {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.canvas-wrap img:not([src]) { display: none; }
+.empty {
+  position: absolute;
+  color: var(--fg-faint); font-size: 12.5px;
+}
+.empty[hidden] { display: none; }
+
+/* 拖动/缩放时右侧预览是旧的, 用一点透明提示"正在重算",
+ * 比无声无息地显示过期画面更诚实。 */
+#effect-img.stale { opacity: .45; }
+.canvas-wrap.dragging { cursor: grabbing; }
+
+/* 取景框 */
+.crop-box {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(0,0,0,.55);
+  cursor: move;
+  pointer-events: auto;
+}
+.crop-box .grid {
+  position: absolute;
+  background: rgba(255,255,255,.22);
+}
+.crop-box .grid.h1, .crop-box .grid.h2 { left: 0; right: 0; height: 1px; }
+.crop-box .grid.v1, .crop-box .grid.v2 { top: 0; bottom: 0; width: 1px; }
+.crop-box .grid.h1 { top: 33.33%; }
+.crop-box .grid.h2 { top: 66.66%; }
+.crop-box .grid.v1 { left: 33.33%; }
+.crop-box .grid.v2 { left: 66.66%; }
+
+.file-line {
+  font-size: 11.5px; color: var(--fg-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.slider-row { display: flex; align-items: center; gap: 9px; }
+.slider-row label { font-size: 11.5px; color: var(--fg-faint); }
+.slider-row .val {
+  font-size: 11.5px; color: var(--fg-dim);
+  font-family: Consolas, monospace; width: 52px; text-align: right;
+}
+input[type=range] {
+  flex: 1; -webkit-appearance: none; appearance: none;
+  height: 3px; border-radius: 3px; background: #33333d; outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--fg); cursor: pointer;
+  border: 2px solid var(--panel);
+  box-shadow: 0 0 0 1px var(--edge-soft);
+}
+.hint { font-size: 11.5px; }
+.hint.dim { color: var(--fg-faint); }
+
+/* ---------------- 备份列表 ---------------- */
+.tabpane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tabpane[hidden] { display: none; }
+.bak-list { flex: 1; overflow-y: auto; padding-right: 4px; }
+.bak-row {
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  background: var(--card);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  display: flex; align-items: center; gap: 12px;
+}
+.bak-row .info { flex: 1; min-width: 0; }
+.bak-row .line1 { display: flex; align-items: center; gap: 9px; }
+.bak-row .ver { font-weight: 600; font-size: 13px; }
+.bak-row .line2 {
+  margin-top: 3px; font-size: 11.5px; color: var(--fg-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---------------- 底部 ---------------- */
+.out {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 18px;
+  background: var(--panel);
+  border-top: 1px solid var(--edge);
+  /* .page 是绝对定位的兄弟节点, 会盖住后面的兄弟。
+   * 底部这条(含"应用封面")必须抬到页面之上, 否则整条被遮住。 */
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  margin: 0 -18px;
+}
+.out .lbl { font-size: 11.5px; color: var(--fg-faint); }
+.out .val {
+  font-size: 12px; color: var(--fg-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.out .val.ok { color: var(--ok); }
+.out .val.err { color: var(--err); }
+.out .val.warn { color: var(--warn); }
+
+/* ---------------- 动画初始状态 ----------------
+ * 这些元素由 GSAP 在加载时从"初始态"动画到"自然态"。
+ * 先用 CSS 把它们藏起来, 避免首帧闪一下再动(FOUT)。
+ * 若 GSAP 没能加载(离线/文件缺失), app.js 会去掉 body 上的 .gsap-ready,
+ * 这条规则随之失效, 界面照常显示 —— 动画是增强, 不是依赖。 */
+body.gsap-ready .brand,
+body.gsap-ready .nav-label,
+body.gsap-ready .nav,
+body.gsap-ready #card-target,
+body.gsap-ready #page-cover .col,
+body.gsap-ready .out {
+  opacity: 0;
+}
+
+/* 备份列表逐行进入 */
+.bak-row { will-change: transform, opacity; }
+/* ---------------- 圆角控制行 ---------------- */
+.corner-row { gap: 7px; flex-wrap: nowrap; }
+.corner-row label { font-size: 11.5px; color: var(--fg-faint); white-space: nowrap; }
+.corner-row .badge { font-size: 10.5px; padding: 1px 7px; }
+.corner-row input[type=range] { flex: 1; min-width: 60px; }
+.corner-row .val {
+  font-size: 11px; color: var(--fg-dim);
+  font-family: Consolas, monospace;
+  width: 64px; text-align: right; white-space: nowrap;
+}
+/* ---------------- 备份缩略图 ---------------- */
+.bak-list .thumb {
+  width: 96px; height: 57px;
+  flex: 0 0 96px;
+  border-radius: 6px;
+  background: #101014;
+  border: 1px solid var(--edge);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  color: var(--fg-faint); font-size: 11px;
+}
+.bak-list .thumb img {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+.bak-list .thumb-fail { color: var(--fg-faint); font-size: 11px; }
+/* ---------------- 权限提示条 ---------------- */
+.admin-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  background: rgba(251,191,36,.09);
+  border: 1px solid rgba(251,191,36,.28);
+  color: var(--warn);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.admin-bar[hidden] { display: none; }
+.admin-bar .ico { font-size: 14px; opacity: .9; }
+.admin-bar .txt { line-height: 1.45; }
+/* ---------------- 危险操作按钮 ---------------- */
+.btn.danger {
+  border-color: rgba(248,113,113,.35);
+  color: var(--err);
+  background: rgba(248,113,113,.06);
+}
+.btn.danger:hover:not(:disabled) {
+  background: rgba(248,113,113,.14);
+  border-color: rgba(248,113,113,.55);
+}
+.btn.danger:disabled {
+  opacity: .35;
+  color: var(--fg-faint);
+  border-color: var(--edge-soft);
+  background: transparent;
+}
+.bak-row .btn { flex-shrink: 0; }/* ---------------- 左侧: 当前目标（与导航项同样式） ---------------- */
+/* 只读展示, 不响应点击 —— 切换在右侧卡片里做。 */
+.nav-target { cursor: default; }
+.nav-target:hover { background: transparent; color: var(--fg-dim); }
+.nav-target #target-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px;
+}
+
+/* ---------------- 右侧: 目标卡片 ---------------- */
+.dll-picker {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--edge);
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.dll-picker[hidden] { display: none; }
+
+.dll-card {
+  flex: 1 1 220px; min-width: 200px;
+  background: var(--card-hi);
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding: 9px 11px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.dll-card:hover { background: #2e2e33; }
+.dll-card.on {
+  border-color: var(--accent);
+  background: rgba(67,149,205,.10);
+}
+.dll-card .top {
+  display: flex; align-items: center; gap: 7px;
+  margin-bottom: 3px;
+}
+.dll-card .ver {
+  font-size: 12.5px; font-weight: 600;
+  font-family: Consolas, monospace;
+}
+.dll-card .path {
+  font-size: 11px; color: var(--fg-faint);
+  font-family: Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
