@@ -680,6 +680,9 @@ def ensure_backup(dll: Path, *, force: bool = False,
         都留下上一版的状态, 可以回退。
       * 首次遇到原版(签名有效)时, 它自然就是一份原版备份 —— 原版备份永不删除。
       * 改过的版本也照备份, 由 trim_backups() 负责只保留最近若干份。
+      * **内容相同的备份不重复存**: 文件名里带了 sha256 前 8 位, 已有同摘要的
+        文件就直接复用。原版永远是最常被重复备份的那一个(每次换封面前它都在),
+        不去重的话点三次「应用封面」就会堆三份一模一样的 5.7MB 原版。
 
     reason 写进文件名, 供备份列表显示来源:
       apply    应用封面之前
@@ -694,8 +697,19 @@ def ensure_backup(dll: Path, *, force: bool = False,
     try:
         # 版本号从 PE 资源读, 文件名里带上真实版本, 列表才能按版本分组。
         ver = file_version(dll) or "unknown"
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         digest = _sha256_file(dll)[:8]
+
+        # 同版本 + 同摘要 = 内容完全一样, 不必再存一份。
+        # 摘要只有 32 位, 所以再比一次完整哈希, 避免极小概率的碰撞误判。
+        for old in DIR_BACKUP.glob(f"{dll.name}.*.{digest}*.bak"):
+            try:
+                if old.stat().st_size == dll.stat().st_size and \
+                        _sha256_file(old) == _sha256_file(dll):
+                    return None, f"内容相同，沿用已有备份: {old.name}"
+            except OSError:
+                continue
+
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = DIR_BACKUP / f"{dll.name}.{ver}.{ts}.{reason}.{digest}.bak"
 
         # 同一秒内重复调用会撞名, 加后缀防止互相覆盖
@@ -727,6 +741,47 @@ def is_original_backup(path: Path) -> bool:
         return kind == "Valid"
     except Exception:
         return False
+
+
+def dedupe_backups() -> int:
+    """
+    清掉内容完全相同的重复备份, 返回删除数量。
+
+    ensure_backup 已经不会新增重复了, 但这个函数用来收拾历史遗留 ——
+    旧规则下每次 apply 都会存一份原版, 已有用户的目录里可能堆着好几份
+    一模一样的 5.7MB 文件。
+
+    每条保留**最早**的那一份(它通常是来源最清楚的, 比如 manual.official),
+    删掉后来的副本。只删原版的重复; 改过的备份即使内容相同也留着,
+    因为它们各自对应一次"换封面前的状态", 删了会让回退链断掉。
+    """
+    removed = 0
+    try:
+        groups: dict[str, list[Path]] = {}
+        for p in DIR_BACKUP.glob("*.bak"):
+            if not is_original_backup(p):
+                continue
+            try:
+                h = _sha256_file(p)
+            except OSError:
+                continue
+            groups.setdefault(h, []).append(p)
+
+        for h, paths in groups.items():
+            if len(paths) < 2:
+                continue
+            # 保留最早的(按 mtime), 其余删除
+            paths.sort(key=lambda x: x.stat().st_mtime)
+            for dup in paths[1:]:
+                try:
+                    dup.unlink()
+                    removed += 1
+                    log(f"删除重复备份: {dup.name}")
+                except OSError:
+                    pass
+    except Exception as e:
+        log(f"dedupe_backups 失败: {e}")
+    return removed
 
 
 def trim_backups(keep: int = KEEP_MODIFIED) -> int:
