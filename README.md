@@ -1,4 +1,4 @@
-# V6PAC
+<img width="681" height="468" alt="image" src="https://github.com/user-attachments/assets/56aecebd-625c-4d5b-8285-27c1186fd82f" /># V6PAC
 
 替换 VOCALOID6 编辑器的**启动封面 / 图标**。
 有问题，嗯。。。。qq群？1128455018
@@ -12,8 +12,10 @@
 
 |界面示例|
 |-|
-|<img width="450" height="269" alt="image" src="https://github.com/user-attachments/assets/06cc01f9-755a-480b-8e8d-2f082b13ae06" />|
-|<img width="450" height="273" alt="image" src="https://github.com/user-attachments/assets/0b11eb1a-afec-4034-ba22-c63431ef319d" />|
+|<img width="450" height="269" alt="image" src="https://github.com/user-attachments/assets/ef10b435-1e5c-4ec2-b8cf-e44fb5ffb649" />
+|
+|<img width="450" height="280" alt="image" src="https://github.com/user-attachments/assets/1fa29068-32cf-4b48-b378-3e1f50d40f2f" />
+|
 ---
 
 ## ⚠️ 运行前必读
